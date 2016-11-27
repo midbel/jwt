@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"panda/uuid"
+	"github.com/midbel/uuid"
 )
 
 const JWT = "jwt"
