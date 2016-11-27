@@ -16,10 +16,10 @@ import (
 const JWT = "jwt"
 
 var (
-	BadSignatureErr = errors.New("bad signature")
-	BadSecretErr    = errors.New("bad secret key")
-	MalFormedErr    = errors.New("malformed token")
-	InvalidErr      = errors.New("invalid token")
+	ErrBadSignature = errors.New("bad signature")
+	ErrBadSecret    = errors.New("bad secret key")
+	ErrMalFormed    = errors.New("malformed token")
+	ErrInvalid      = errors.New("invalid token")
 )
 
 type Signer interface {
@@ -70,11 +70,16 @@ func (s hmacSigner) Sign(p interface{}) (string, error) {
 		"typ": JWT,
 		"alg": s.alg,
 	}
-	if buf, err := json.Marshal(header); err != nil {
+	var (
+		buf []byte
+		err error
+	)
+	buf, err = json.Marshal(header)
+	if err != nil {
 		return "", err
-	} else {
-		t.Header = enc.EncodeToString(buf)
 	}
+	t.Header = enc.EncodeToString(buf)
+	
 	id, _ := uuid.UUID4()
 	payload := body{
 		Payload: p,
@@ -85,11 +90,11 @@ func (s hmacSigner) Sign(p interface{}) (string, error) {
 	if s.TTL > 0 {
 		payload.Expire = time.Now().Add(time.Second * time.Duration(s.TTL))
 	}
-	if buf, err := json.Marshal(payload); err != nil {
+	buf, err := json.Marshal(payload)
+	if err != nil {
 		return "", err
-	} else {
-		t.Payload = enc.EncodeToString(buf)
 	}
+	t.Payload = enc.EncodeToString(buf)
 
 	part := t.Header + "." + t.Payload
 	mac := hmac.New(s.sign, []byte(s.secret))
@@ -106,7 +111,7 @@ func (s hmacSigner) Verify(t string, p interface{}) error {
 	)
 	ix = strings.Index(t, ".")
 	if ix < 0 {
-		return MalFormedErr
+		return ErrMalFormed
 	}
 	h, t := t[:ix], t[ix+1:]
 
@@ -114,18 +119,18 @@ func (s hmacSigner) Verify(t string, p interface{}) error {
 
 	buf, err = enc.DecodeString(h)
 	if err != nil {
-		return MalFormedErr
+		return ErrMalFormed
 	}
 	header := make(map[string]string)
 	if err := json.Unmarshal(buf, &header); err != nil {
-		return MalFormedErr
+		return ErrMalFormed
 	}
 	if header["typ"] != JWT || header["alg"] != s.alg {
-		return InvalidErr
+		return ErrInvalid
 	}
 	ix = strings.Index(t, ".")
 	if ix < 0 {
-		return MalFormedErr
+		return ErrMalFormed
 	}
 	payload, signature := t[:ix], t[ix+1:]
 
@@ -134,25 +139,25 @@ func (s hmacSigner) Verify(t string, p interface{}) error {
 	sum := mac.Sum(nil)
 
 	if !hmac.Equal([]byte(enc.EncodeToString(sum)), []byte(signature)) {
-		return BadSignatureErr
+		return ErrBadSignature
 	}
 
 	buf, err = enc.DecodeString(payload)
 	if err != nil {
-		return MalFormedErr
+		return ErrMalFormed
 	}
 	b := &body{Payload: p}
 	if err := json.Unmarshal(buf, b); err != nil {
-		return MalFormedErr
+		return ErrMalFormed
 	}
 	if delta := b.Expire.Sub(b.Created); int(delta.Seconds()) != s.TTL {
-		return InvalidErr
+		return ErrInvalid
 	}
 	if b.Issuer != s.Issuer {
-		return InvalidErr
+		return ErrInvalid
 	}
 	if delta := time.Since(b.Expire); delta > 0 {
-		return InvalidErr
+		return ErrInvalid
 	}
 	return nil
 }
