@@ -15,10 +15,22 @@ import (
 
 const JWT = "jwt"
 
+//Common errors type
 var (
+	//ErrBadSignature is returned when the signature of token does not match the
+	//expected signature generated with the secret key
 	ErrBadSignature = errors.New("bad signature")
+	
+	//ErrBadSecret is returned when an empty secret key is given.
 	ErrBadSecret    = errors.New("bad secret key")
+	
+	//ErrMalFormed is returned when the token does not have the expected format
+	//as described in the RFC.
 	ErrMalFormed    = errors.New("malformed token")
+	
+	//ErrInvalid is returned when the token hasn't the good issuer or when it has
+	//expired or when the issue at is after the expiration time. ErrInvalid is
+	//also returned when the payload can not be unmarshaled from the token.
 	ErrInvalid      = errors.New("invalid token")
 )
 
@@ -45,7 +57,7 @@ type hmacSigner struct {
 
 func NewSigner(key, alg, issuer string, ttl int) (Signer, error) {
 	if key == "" {
-		return nil, fmt.Errorf("missing key")
+		return nil, ErrBadSecret
 	}
 	var f func() hash.Hash
 	switch strings.ToLower(alg) {
