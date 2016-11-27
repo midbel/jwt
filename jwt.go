@@ -79,12 +79,11 @@ func (s hmacSigner) Sign(p interface{}) (string, error) {
 		return "", err
 	}
 	t.Header = enc.EncodeToString(buf)
-	
-	id, _ := uuid.UUID4()
+
 	payload := body{
 		Payload: p,
 		Issuer:  s.Issuer,
-		Id:      id.String(),
+		Id:      strconv.Itoa(int(time.Now().Unix())),
 		Created: time.Now(),
 	}
 	if s.TTL > 0 {
