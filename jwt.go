@@ -39,6 +39,8 @@ var (
 	ErrInvalid      = errors.New("invalid token")
 )
 
+//Signer is the interface type that provides the methods to generate JWT (by
+//signing any payload) and to verfiy them.
 type Signer interface {
 	Sign(interface{}) (string, error)
 	Verify(string, interface{}) error
