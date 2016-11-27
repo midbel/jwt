@@ -11,8 +11,6 @@ import (
 	"hash"
 	"strings"
 	"time"
-
-	"github.com/midbel/uuid"
 )
 
 const JWT = "jwt"
@@ -47,11 +45,7 @@ type hmacSigner struct {
 
 func NewSigner(key, alg, issuer string, ttl int) (Signer, error) {
 	if key == "" {
-		s, err := uuid.UUID1()
-		if err != nil {
-			return nil, err
-		}
-		key = s.String()
+		return nil, fmt.Errorf("missing key")
 	}
 	var f func() hash.Hash
 	switch strings.ToLower(alg) {
