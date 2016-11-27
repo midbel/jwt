@@ -43,7 +43,12 @@ var (
 //Signer is the interface type that provides the methods to generate JWT (by
 //signing any payload) and to verfiy them.
 type Signer interface {
+	//Sign generate the payload for the given token. It returns on error if the
+	//payload can not be marshalled in JSON.
 	Sign(interface{}) (string, error)
+	
+	//Verify check the given token from the Signer settings and unmarshal the 
+	//payload. It gives an error if the token is invalid or malformed.
 	Verify(string, interface{}) error
 }
 
