@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -108,7 +109,7 @@ func (s hmacSigner) Sign(p interface{}) (string, error) {
 	if s.TTL > 0 {
 		payload.Expire = time.Now().Add(time.Second * time.Duration(s.TTL))
 	}
-	buf, err := json.Marshal(payload)
+	buf, err = json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
