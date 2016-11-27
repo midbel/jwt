@@ -1,3 +1,8 @@
+//Package jwt provides a basic implementation of JSON Web Token as described in 
+//RFC 7519.
+//
+//This package is not yet fully compliant with the RFC since it does
+//yet provide the RS256 algorithm.
 package jwt
 
 import (
