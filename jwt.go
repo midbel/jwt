@@ -1,4 +1,4 @@
-//Package jwt provides a basic implementation of JSON Web Token as described in 
+//Package jwt provides a basic implementation of JSON Web Token as described in
 //RFC 7519.
 //
 //This package is not yet fully compliant with the RFC since it does
@@ -26,18 +26,18 @@ var (
 	//ErrBadSignature is returned when the signature of token does not match the
 	//expected signature generated with the secret key
 	ErrBadSignature = errors.New("bad signature")
-	
+
 	//ErrBadSecret is returned when an empty secret key is given.
-	ErrBadSecret    = errors.New("bad secret key")
-	
+	ErrBadSecret = errors.New("bad secret key")
+
 	//ErrMalFormed is returned when the token does not have the expected format
 	//as described in the RFC.
-	ErrMalFormed    = errors.New("malformed token")
-	
+	ErrMalFormed = errors.New("malformed token")
+
 	//ErrInvalid is returned when the token hasn't the good issuer or when it has
 	//expired or when the issue at is after the expiration time. ErrInvalid is
 	//also returned when the payload can not be unmarshaled from the token.
-	ErrInvalid      = errors.New("invalid token")
+	ErrInvalid = errors.New("invalid token")
 )
 
 //Signer is the interface type that provides the methods to generate JWT (by
@@ -46,8 +46,8 @@ type Signer interface {
 	//Sign generate the payload for the given token. It returns on error if the
 	//payload can not be marshalled in JSON.
 	Sign(interface{}) (string, error)
-	
-	//Verify check the given token from the Signer settings and unmarshal the 
+
+	//Verify check the given token from the Signer settings and unmarshal the
 	//payload. It gives an error if the token is invalid or malformed.
 	Verify(string, interface{}) error
 }
@@ -174,13 +174,13 @@ func (s hmacSigner) Verify(t string, p interface{}) error {
 	if err := json.Unmarshal(buf, b); err != nil {
 		return ErrMalFormed
 	}
-	if delta := b.Expire.Sub(b.Created); int(delta.Seconds()) != s.TTL {
+	if delta := b.Expire.Sub(b.Created); s.TTL > 0 && int(delta.Seconds()) != s.TTL {
 		return ErrInvalid
 	}
 	if b.Issuer != s.Issuer {
 		return ErrInvalid
 	}
-	if delta := time.Since(b.Expire); delta > 0 {
+	if delta := time.Since(b.Expire); !b.Expire.IsZero() && delta > 0 {
 		return ErrInvalid
 	}
 	return nil
