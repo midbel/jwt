@@ -7,19 +7,19 @@ package jwt
 
 import (
 	"crypto/hmac"
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const JWT = "jwt"
+
+var std = base64.StdEncoding.WithPadding(base64.NoPadding)
 
 //Common errors type
 var (
@@ -52,136 +52,127 @@ type Signer interface {
 	Verify(string, interface{}) error
 }
 
-type body struct {
-	Payload interface{} `json:"payload"`
-	Issuer  string      `json:"iss,omitempty"`
-	Id      string      `json:"jti,omitempty"`
-	Created time.Time   `json:"iat"`
-	Expire  time.Time   `json:"exp,omitempty"`
+type jose struct {
+	Alg string `json:"alg"`
+	Typ string `json:"typ"`
 }
 
-type hmacSigner struct {
+func (j *jose) UnmarshalJSON(bs []byte) error {
+	v := struct {
+		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+	}{}
+	if err := json.Unmarshal(bs, &v); err != nil {
+		return err
+	}
+	if !(v.Alg == "HS256" || v.Typ == JWT) {
+		return ErrMalFormed
+	}
+	j.Alg, j.Typ = v.Alg, v.Typ
+	return nil
+}
+
+type claims struct {
+	Payload interface{} `json:"payload"`
+	Issuer  string      `json:"iss,omitempty"`
+	Jid     string      `json:"jti,omitempty"`
+	Created time.Time   `json:"iat,omitempty"`
+	Expired time.Time   `json:"exp,omitempty"`
+}
+
+type hs256 struct {
 	TTL    int
 	Issuer string
 	secret string
-	alg    string
-	sign   func() hash.Hash
 }
 
-func NewSigner(key, alg, issuer string, ttl int) (Signer, error) {
+func New(alg, key, iss string, ttl int) (Signer, error) {
 	if key == "" {
 		return nil, ErrBadSecret
 	}
-	var f func() hash.Hash
 	switch strings.ToLower(alg) {
 	case "hs256", "":
-		f = sha256.New
-	case "md5":
-		f = md5.New
 	default:
 		return nil, fmt.Errorf("unsupported alg %s", alg)
 	}
-	return &hmacSigner{ttl, issuer, key, strings.ToUpper(alg), f}, nil
+	return &hs256{ttl, iss, key}, nil
 }
 
-func (s hmacSigner) Sign(p interface{}) (string, error) {
-	t := struct {
-		Header  string
-		Payload string
-	}{}
-	enc := base64.StdEncoding.WithPadding(base64.NoPadding)
-
-	header := map[string]string{
-		"typ": JWT,
-		"alg": s.alg,
-	}
-	var (
-		buf []byte
-		err error
-	)
-	buf, err = json.Marshal(header)
-	if err != nil {
-		return "", err
-	}
-	t.Header = enc.EncodeToString(buf)
-
-	payload := body{
-		Payload: p,
+func (s hs256) Sign(v interface{}) (string, error) {
+	b := claims{
+		Payload: v,
 		Issuer:  s.Issuer,
-		Id:      strconv.Itoa(int(time.Now().Unix())),
+		Jid:     strconv.Itoa(int(time.Now().Unix())),
 		Created: time.Now(),
 	}
 	if s.TTL > 0 {
-		payload.Expire = time.Now().Add(time.Second * time.Duration(s.TTL))
+		b.Expired = time.Now().Add(time.Second * time.Duration(s.TTL))
 	}
-	buf, err = json.Marshal(payload)
-	if err != nil {
-		return "", err
+	j := jose{
+		Typ: JWT,
+		Alg: "HS256",
 	}
-	t.Payload = enc.EncodeToString(buf)
+	k := marshalPart(j) + "." + marshalPart(b)
 
-	part := t.Header + "." + t.Payload
-	mac := hmac.New(s.sign, []byte(s.secret))
-	mac.Write([]byte(part))
+	mac := hmac.New(sha256.New, []byte(s.secret))
+	mac.Write([]byte(k))
 
-	return part + "." + enc.EncodeToString(mac.Sum(nil)), nil
+	return k + "." + std.EncodeToString(mac.Sum(nil)), nil
 }
 
-func (s hmacSigner) Verify(t string, p interface{}) error {
-	var (
-		ix  int
-		buf []byte
-		err error
-	)
-	ix = strings.Index(t, ".")
-	if ix < 0 {
-		return ErrMalFormed
-	}
-	h, t := t[:ix], t[ix+1:]
-
-	enc := base64.StdEncoding.WithPadding(base64.NoPadding)
-
-	buf, err = enc.DecodeString(h)
+func (s hs256) Verify(t string, v interface{}) error {
+	h, p, err := verifyToken(t, s.secret)
 	if err != nil {
+		return err
+	}
+	j := new(jose)
+	if err := unmarshalPart(h, j); err != nil {
 		return ErrMalFormed
-	}
-	header := make(map[string]string)
-	if err := json.Unmarshal(buf, &header); err != nil {
-		return ErrMalFormed
-	}
-	if header["typ"] != JWT || header["alg"] != s.alg {
-		return ErrInvalid
-	}
-	ix = strings.Index(t, ".")
-	if ix < 0 {
-		return ErrMalFormed
-	}
-	payload, signature := t[:ix], t[ix+1:]
-
-	mac := hmac.New(s.sign, []byte(s.secret))
-	mac.Write([]byte(h + "." + payload))
-	sum := mac.Sum(nil)
-
-	if !hmac.Equal([]byte(enc.EncodeToString(sum)), []byte(signature)) {
-		return ErrBadSignature
 	}
 
-	buf, err = enc.DecodeString(payload)
-	if err != nil {
+	b := &claims{Payload: v}
+	if err := unmarshalPart(p, b); err != nil {
 		return ErrMalFormed
 	}
-	b := &body{Payload: p}
-	if err := json.Unmarshal(buf, b); err != nil {
-		return ErrMalFormed
-	}
-	if delta := b.Expire.Sub(b.Created); s.TTL > 0 && int(delta.Seconds()) != s.TTL {
+	return s.validate(b)
+}
+
+func (s hs256) validate(b *claims) error {
+	if delta := b.Expired.Sub(b.Created); s.TTL > 0 && int(delta.Seconds()) != s.TTL {
 		return ErrInvalid
 	}
 	if b.Issuer != s.Issuer {
 		return ErrInvalid
 	}
-	if delta := time.Since(b.Expire); !b.Expire.IsZero() && delta > 0 {
+	if delta := time.Since(b.Expired); !b.Expired.IsZero() && delta > 0 {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func verifyToken(t, s string) (string, string, error) {
+	ps := strings.Split(t, ".")
+
+	m := hmac.New(sha256.New, []byte(s))
+	m.Write([]byte(ps[0] + "." + ps[1]))
+	sum := m.Sum(nil)
+
+	if !hmac.Equal([]byte(std.EncodeToString(sum)), []byte(ps[2])) {
+		return "", "", ErrBadSignature
+	}
+
+	return ps[0], ps[1], nil
+}
+
+func marshalPart(v interface{}) string {
+	bs, _ := json.Marshal(v)
+	return std.EncodeToString(bs)
+}
+
+func unmarshalPart(s string, v interface{}) error {
+	bs, err := std.DecodeString(s)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(bs, v)
 }
