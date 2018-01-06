@@ -76,8 +76,21 @@ type claims struct {
 	Payload interface{} `json:"payload"`
 	Issuer  string      `json:"iss,omitempty"`
 	Jid     string      `json:"jti,omitempty"`
-	Created time.Time   `json:"iat,omitempty"`
-	Expired time.Time   `json:"exp,omitempty"`
+	Created *time.Time  `json:"iat,omitempty"`
+	Expired *time.Time  `json:"exp,omitempty"`
+}
+
+type none struct {
+	TTL    int
+	Issuer string
+}
+
+func (n *none) Sign(v interface{}) (string, error) {
+	return "", nil
+}
+
+func (n *none) Verify(t string, v interface{}) error {
+	return nil
 }
 
 type hs256 struct {
@@ -87,15 +100,17 @@ type hs256 struct {
 }
 
 func New(alg, key, iss string, ttl int) (Signer, error) {
-	if key == "" {
-		return nil, ErrBadSecret
-	}
 	switch strings.ToLower(alg) {
-	case "hs256", "":
+	case "hs256":
+		if key == "" {
+			return nil, ErrBadSecret
+		}
+		return &hs256{ttl, iss, key}, nil
+	case "":
+		return &none{ttl, iss}, nil
 	default:
 		return nil, fmt.Errorf("unsupported alg %s", alg)
 	}
-	return &hs256{ttl, iss, key}, nil
 }
 
 func (s hs256) Sign(v interface{}) (string, error) {
@@ -103,10 +118,10 @@ func (s hs256) Sign(v interface{}) (string, error) {
 		Payload: v,
 		Issuer:  s.Issuer,
 		Jid:     strconv.Itoa(int(time.Now().Unix())),
-		Created: time.Now(),
 	}
-	if s.TTL > 0 {
-		b.Expired = time.Now().Add(time.Second * time.Duration(s.TTL))
+	if n := time.Now(); s.TTL > 0 {
+		e := n.Add(time.Second * time.Duration(s.TTL))
+		b.Created, b.Expired = &n, &e
 	}
 	j := jose{
 		Typ: JWT,
@@ -129,8 +144,10 @@ func (s hs256) Verify(t string, v interface{}) error {
 	if err := unmarshalPart(h, j); err != nil {
 		return ErrMalFormed
 	}
-
 	b := &claims{Payload: v}
+	if b.Payload == nil {
+		b.Payload = make(map[string]interface{})
+	}
 	if err := unmarshalPart(p, b); err != nil {
 		return ErrMalFormed
 	}
@@ -138,13 +155,16 @@ func (s hs256) Verify(t string, v interface{}) error {
 }
 
 func (s hs256) validate(b *claims) error {
-	if delta := b.Expired.Sub(b.Created); s.TTL > 0 && int(delta.Seconds()) != s.TTL {
-		return ErrInvalid
-	}
 	if b.Issuer != s.Issuer {
 		return ErrInvalid
 	}
-	if delta := time.Since(b.Expired); !b.Expired.IsZero() && delta > 0 {
+	if b.Expired == nil || b.Created == nil {
+		return nil
+	}
+	if delta := (*b.Expired).Sub(*b.Created); s.TTL > 0 && int(delta) != s.TTL {
+		return ErrInvalid
+	}
+	if delta := time.Since(*b.Expired); !(*b.Expired).IsZero() && delta > 0 {
 		return ErrInvalid
 	}
 	return nil
