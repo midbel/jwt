@@ -81,7 +81,7 @@ type claims struct {
 }
 
 type none struct {
-	TTL    int
+	TTL    time.Duration
 	Issuer string
 }
 
@@ -94,20 +94,24 @@ func (n *none) Verify(t string, v interface{}) error {
 }
 
 type hs256 struct {
-	TTL    int
+	TTL    time.Duration
 	Issuer string
 	secret string
 }
 
 func New(alg, key, iss string, ttl int) (Signer, error) {
+	var t time.Duration
+	if ttl > 0 {
+		t = time.Second * time.Duration(ttl)
+	}
 	switch strings.ToLower(alg) {
 	case "hs256":
 		if key == "" {
 			return nil, ErrBadSecret
 		}
-		return &hs256{ttl, iss, key}, nil
+		return &hs256{t, iss, key}, nil
 	case "":
-		return &none{ttl, iss}, nil
+		return &none{t, iss}, nil
 	default:
 		return nil, fmt.Errorf("unsupported alg %s", alg)
 	}
@@ -120,7 +124,7 @@ func (s hs256) Sign(v interface{}) (string, error) {
 		Jid:     strconv.Itoa(int(time.Now().Unix())),
 	}
 	if n := time.Now(); s.TTL > 0 {
-		e := n.Add(time.Second * time.Duration(s.TTL))
+		e := n.Add(s.TTL)
 		b.Created, b.Expired = &n, &e
 	}
 	j := jose{
@@ -161,7 +165,7 @@ func (s hs256) validate(b *claims) error {
 	if b.Expired == nil || b.Created == nil {
 		return nil
 	}
-	if delta := (*b.Expired).Sub(*b.Created); s.TTL > 0 && int(delta) != s.TTL {
+	if delta := time.Since(*b.Created); s.TTL > 0 && delta >= s.TTL {
 		return ErrInvalid
 	}
 	if delta := time.Since(*b.Expired); !(*b.Expired).IsZero() && delta > 0 {
@@ -171,13 +175,17 @@ func (s hs256) validate(b *claims) error {
 }
 
 func verifyToken(t, s string) (string, string, error) {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return "", "", ErrInvalid
+	}
 	ps := strings.Split(t, ".")
 
 	m := hmac.New(sha256.New, []byte(s))
 	m.Write([]byte(ps[0] + "." + ps[1]))
 	sum := m.Sum(nil)
 
-	if !hmac.Equal([]byte(std.EncodeToString(sum)), []byte(ps[2])) {
+	if prev, err := std.DecodeString(ps[2]); err != nil || !hmac.Equal(sum, prev) {
 		return "", "", ErrBadSignature
 	}
 
