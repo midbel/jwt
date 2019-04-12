@@ -8,6 +8,7 @@ package jwt
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -40,8 +41,9 @@ var (
 )
 
 const (
-	hs256 = "HS256"
-	none  = "none"
+	HS256 = "HS256"
+	HS512 = "HS512"
+	None  = "none"
 )
 
 type Signer struct {
@@ -55,7 +57,7 @@ type Signer struct {
 func New(options ...Option) Signer {
 	var s Signer
 
-	s.alg, s.mac = none, nonehash{}
+	s.alg, s.mac = None, nonehash{}
 	for _, o := range options {
 		o(&s)
 	}
@@ -66,9 +68,11 @@ type Option func(*Signer)
 
 func WithSecret(secret, alg string) Option {
 	return func(s *Signer) {
-		switch strings.ToLower(alg) {
-		case "hs256":
+		switch alg {
+		case HS256:
 			s.mac = hmac.New(sha256.New, []byte(secret))
+		case HS512:
+			s.mac = hmac.New(sha512.New, []byte(secret))
 		default:
 		}
 	}
@@ -92,7 +96,7 @@ func WithTTL(ttl time.Duration) Option {
 func (s Signer) Sign(v interface{}) (string, error) {
 	defer s.mac.Reset()
 
-	now := timeNow()
+	now := time.Now()
 	b := claims{
 		Payload: v,
 		Issuer:  s.issuer,
@@ -154,7 +158,7 @@ func (s Signer) verifyToken(token string) (string, string, error) {
 	sum := s.mac.Sum(nil)
 
 	var err error
-	if prev, err := std.DecodeString(ps[2]); err != nil || !hmac.Equal(sum, prev) {
+	if prev, e := std.DecodeString(ps[2]); e != nil || !hmac.Equal(sum, prev) {
 		err = ErrSignature
 	}
 	return ps[0], ps[1], err
@@ -212,8 +216,6 @@ func unmarshalPart(s string, v interface{}) error {
 	}
 	return json.Unmarshal(bs, v)
 }
-
-var timeNow = time.Now
 
 type nonehash struct{}
 
