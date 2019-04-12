@@ -21,6 +21,11 @@ const JWT = "jwt"
 
 var std = base64.StdEncoding.WithPadding(base64.NoPadding)
 
+var (
+	timeNow   = time.Now
+	timeSince = time.Since
+)
+
 //Common errors type
 var (
 	//ErrSignature is returned when the signature of token does not match the
@@ -96,7 +101,7 @@ func WithTTL(ttl time.Duration) Option {
 func (s Signer) Sign(v interface{}) (string, error) {
 	defer s.mac.Reset()
 
-	now := time.Now()
+	now := timeNow()
 	b := claims{
 		Payload: v,
 		Issuer:  s.issuer,
@@ -141,10 +146,10 @@ func (s Signer) validate(b claims) error {
 	if b.Expired == nil || b.Created == nil {
 		return nil
 	}
-	if delta := time.Since(*b.Created); s.ttl > 0 && delta >= s.ttl {
+	if delta := timeSince(*b.Created); s.ttl > 0 && delta >= s.ttl {
 		return ErrInvalid
 	}
-	if delta := time.Since(*b.Expired); !(*b.Expired).IsZero() && delta > 0 {
+	if delta := timeSince(*b.Expired); !(*b.Expired).IsZero() && delta > 0 {
 		return ErrInvalid
 	}
 	return nil

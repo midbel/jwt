@@ -2,12 +2,22 @@ package jwt
 
 import (
 	"testing"
+	"time"
 )
 
 type user struct {
 	Id    string `json:"sub"`
 	Name  string `json:"name"`
 	Admin bool   `json:"admin"`
+}
+
+func init() {
+	timeNow = func() time.Time {
+		return time.Date(2019, 6, 11, 11, 45, 0, 0, time.UTC)
+	}
+	timeSince = func(_ time.Time) time.Duration {
+		return time.Hour
+	}
 }
 
 func TestVerifyToken(t *testing.T) {
@@ -22,6 +32,25 @@ func TestVerifyToken(t *testing.T) {
 		s2 := New(WithSecret("hello", HS256), WithIssuer("world.be"))
 		testTokensEqual(t, s1, s2)
 		testVerifyToken(t, s1, s2)
+	})
+	t.Run("expiration", func(t *testing.T) {
+		s := New(WithSecret("hello", HS256), WithIssuer("hello.be"), WithTTL(10))
+		v := user{
+			Id:    "1234567890",
+			Name:  "John Doe",
+			Admin: true,
+		}
+		k, err := s.Sign(v)
+		if err != nil {
+			t.Errorf("unexpected error when signing: %s", err)
+			return
+		}
+
+		var w user
+		if err := s.Verify(k, &w); err == nil {
+			t.Errorf("token should have expired but is not")
+			return
+		}
 	})
 }
 
