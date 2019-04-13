@@ -1,21 +1,24 @@
 //Package jwt provides a basic implementation of JSON Web Token as described in
 //RFC 7519.
-//
-//This package is not yet fully compliant with the RFC since it does
-//yet provide the RS256 algorithm.
 package jwt
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/x509"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -35,9 +38,9 @@ var (
 	//expected signature generated with the secret key
 	ErrSignature = errors.New("bad signature")
 
-	//ErrMalFormed is returned when the token does not have the expected format
+	//ErrMalformed is returned when the token does not have the expected format
 	//as described in the RFC.
-	ErrMalFormed = errors.New("malformed token")
+	ErrMalformed = errors.New("malformed token")
 
 	//ErrInvalid is returned when the token hasn't the good issuer or when it has
 	//expired or when the issue at is after the expiration time. ErrInvalid is
@@ -47,7 +50,10 @@ var (
 
 const (
 	HS256 = "HS256"
+	HS384 = "HS384"
 	HS512 = "HS512"
+	RS256 = "RS256"
+	ES256 = "ES256"
 	None  = "none"
 )
 
@@ -59,62 +65,87 @@ type Signer struct {
 	sign signer
 }
 
-func New(options ...Option) Signer {
+func New(options ...Option) (Signer, error) {
 	var s Signer
 
 	s.alg, s.sign = None, nonehash{}
 	for _, o := range options {
-		o(&s)
+		if err := o(&s); err != nil {
+			return s, err
+		}
 	}
-	return s
+	return s, nil
 }
 
-type Option func(*Signer)
+type Option func(*Signer) error
 
-func WithSecret(secret, alg string) Option {
-	return func(s *Signer) {
-
-		var h hs
+func WithSecret(secret []byte, alg string) Option {
+	return func(s *Signer) error {
+		var sign signer
 		switch alg {
-		case HS256:
-			h.mac = hmac.New(sha256.New, []byte(secret))
-		case HS512:
-			h.mac = hmac.New(sha512.New, []byte(secret))
+		case HS256, HS512, HS384, "":
+			h, err := hmacSigner(alg, secret)
+			if err != nil {
+				return err
+			}
+			sign = h
+		case RS256:
+			k, err := x509.ParsePKCS1PrivateKey(secret)
+			if err != nil {
+				return err
+			}
+			sign = &rsapkcs{k}
+		case ES256:
+			k, err := x509.ParseECPrivateKey(secret)
+			if err != nil {
+				return err
+			}
+			sign = &ecdsha{k}
 		default:
-			return
+			return fmt.Errorf("unkown algorithm: %s", alg)
 		}
-		s.sign = &h
+		s.sign, s.alg = sign, alg
+		return nil
 	}
 }
 
 func WithPKCS(size int) Option {
-	return func(s *Signer) {
+	return func(s *Signer) error {
 		pk, err := rsa.GenerateKey(rand.Reader, size)
-		if err != nil {
-			return
+		if err == nil {
+			s.sign, s.alg = &rsapkcs{pk}, RS256
 		}
-		s.sign = &rsapkcs{pk}
+		return err
+	}
+}
+
+func WithECDSA() Option {
+	return func(s *Signer) error {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err == nil {
+			s.sign = &ecdsha{k}
+		}
+		return err
 	}
 }
 
 func WithIssuer(issuer string) Option {
-	return func(s *Signer) {
+	return func(s *Signer) error {
 		s.issuer = issuer
+		return nil
 	}
 }
 
 func WithTTL(ttl time.Duration) Option {
-	return func(s *Signer) {
-		if ttl < time.Second {
-			return
+	return func(s *Signer) error {
+		if ttl >= time.Second {
+			s.ttl = ttl
 		}
-		s.ttl = ttl
+		return nil
 	}
 }
 
 func (s Signer) Sign(v interface{}) (string, error) {
-	// defer s.mac.Reset()
-
 	now := timeNow()
 	b := claims{
 		Payload: v,
@@ -125,9 +156,10 @@ func (s Signer) Sign(v interface{}) (string, error) {
 	if e := now.Add(s.ttl); s.ttl > 0 {
 		b.Expired = &e
 	}
-	j := jose{
-		Alg: s.alg,
-	}
+	// j := jose{
+	// 	Alg: s.alg,
+	// }
+	j := jose(s.alg)
 	k := marshalPart(&j) + "." + marshalPart(b)
 	return s.sign.Sign(k), nil
 }
@@ -139,14 +171,14 @@ func (s Signer) Verify(token string, v interface{}) error {
 	}
 	var j jose
 	if err := unmarshalPart(h, &j); err != nil {
-		return ErrMalFormed
+		return ErrMalformed
 	}
 	b := claims{Payload: v}
 	if b.Payload == nil {
 		b.Payload = make(map[string]interface{})
 	}
 	if err := unmarshalPart(p, &b); err != nil {
-		return ErrMalFormed
+		return ErrMalformed
 	}
 	return s.validate(b)
 }
@@ -167,17 +199,14 @@ func (s Signer) validate(b claims) error {
 	return nil
 }
 
-type jose struct {
-	Alg string `json:"alg"`
-	Typ string `json:"typ"`
-}
+type jose string
 
 func (j *jose) MarshalJSON() ([]byte, error) {
 	v := struct {
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
 	}{
-		Alg: j.Alg,
+		Alg: string(*j),
 		Typ: JWT,
 	}
 	bs, err := json.Marshal(v)
@@ -193,9 +222,13 @@ func (j *jose) UnmarshalJSON(bs []byte) error {
 		return err
 	}
 	if v.Typ != JWT {
-		return ErrMalFormed
+		return ErrMalformed
 	}
-	j.Alg, j.Typ = v.Alg, v.Typ
+	if v.Alg == "" {
+		return ErrMalformed
+	}
+	*j = jose(v.Alg)
+	// j.Alg, j.Typ = v.Alg, v.Typ
 	return nil
 }
 
@@ -229,6 +262,21 @@ type hs struct {
 	mac hash.Hash
 }
 
+func hmacSigner(alg string, secret []byte) (signer, error) {
+	var h hs
+	switch alg {
+	case HS256, "":
+		h.mac = hmac.New(sha256.New, secret)
+	case HS384:
+		h.mac = hmac.New(sha512.New384, secret)
+	case HS512:
+		h.mac = hmac.New(sha512.New, secret)
+	default:
+		return nil, fmt.Errorf("unknown algorithm: %s", alg)
+	}
+	return &h, nil
+}
+
 func (h *hs) Sign(token string) string {
 	defer h.mac.Reset()
 
@@ -247,6 +295,43 @@ func (h *hs) Verify(token string) (string, string, error) {
 
 	if prev, e := std.DecodeString(ps[2]); e != nil || !hmac.Equal(sum, prev) {
 		err = ErrSignature
+	}
+	return ps[0], ps[1], err
+}
+
+type ecdsha struct {
+	key *ecdsa.PrivateKey
+}
+
+func (e *ecdsha) Sign(token string) string {
+	hashed := sha256.Sum256([]byte(token))
+
+	r, s, err := ecdsa.Sign(rand.Reader, e.key, hashed[:])
+	if err == nil {
+		c := struct{ R, S *big.Int }{r, s}
+		if sign, err := asn1.Marshal(c); err == nil {
+			token += "." + std.EncodeToString(sign)
+		}
+	}
+	return token
+}
+
+func (e *ecdsha) Verify(token string) (string, string, error) {
+	ps, err := splitToken(token)
+	if err != nil {
+		return "", "", err
+	}
+	sign, err := std.DecodeString(ps[2])
+	if err != nil {
+		return "", "", ErrMalformed
+	}
+	c := struct{ R, S *big.Int }{}
+	if _, err := asn1.Unmarshal(sign, &c); err != nil {
+		return "", "", ErrMalformed
+	}
+	hashed := sha256.Sum256([]byte(ps[0] + "." + ps[1]))
+	if !ecdsa.Verify(&e.key.PublicKey, hashed[:], c.R, c.S) {
+		err = ErrInvalid
 	}
 	return ps[0], ps[1], err
 }
@@ -272,7 +357,7 @@ func (r *rsapkcs) Verify(token string) (string, string, error) {
 	}
 	sign, err := std.DecodeString(ps[2])
 	if err != nil {
-		return "", "", ErrMalFormed
+		return "", "", ErrMalformed
 	}
 	hashed := sha256.Sum256([]byte(ps[0] + "." + ps[1]))
 	err = rsa.VerifyPKCS1v15(&r.key.PublicKey, crypto.SHA256, hashed[:], sign)
@@ -291,7 +376,7 @@ func (nonehash) Verify(token string) (string, string, error) {
 		return "", "", err
 	}
 	if ps[2] != "" {
-		return "", "", ErrMalFormed
+		return "", "", ErrMalformed
 	}
 	return ps[0], ps[1], nil
 }
@@ -299,7 +384,7 @@ func (nonehash) Verify(token string) (string, string, error) {
 func splitToken(token string) ([]string, error) {
 	ps := strings.Split(token, ".")
 	if len(ps) != 3 {
-		return nil, ErrMalFormed
+		return nil, ErrMalformed
 	}
 	return ps, nil
 }

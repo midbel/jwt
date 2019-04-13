@@ -1,6 +1,7 @@
 package jwt
 
 import (
+	"encoding/pem"
 	"testing"
 	"time"
 )
@@ -22,19 +23,19 @@ func init() {
 
 func TestVerifyToken(t *testing.T) {
 	t.Run("secrets", func(t *testing.T) {
-		s1 := New(WithSecret("hello", HS256), WithIssuer("hello.be"))
-		s2 := New(WithSecret("world", HS256), WithIssuer("hello.be"))
+		s1, _ := New(WithSecret([]byte("hello"), HS256), WithIssuer("hello.be"))
+		s2, _ := New(WithSecret([]byte("world"), HS256), WithIssuer("hello.be"))
 		testTokensEqual(t, s1, s2)
 		testVerifyToken(t, s1, s2)
 	})
 	t.Run("issuers", func(t *testing.T) {
-		s1 := New(WithSecret("hello", HS256), WithIssuer("hello.be"))
-		s2 := New(WithSecret("hello", HS256), WithIssuer("world.be"))
+		s1, _ := New(WithSecret([]byte("hello"), HS256), WithIssuer("hello.be"))
+		s2, _ := New(WithSecret([]byte("hello"), HS256), WithIssuer("world.be"))
 		testTokensEqual(t, s1, s2)
 		testVerifyToken(t, s1, s2)
 	})
 	t.Run("expiration", func(t *testing.T) {
-		s := New(WithSecret("hello", HS256), WithIssuer("hello.be"), WithTTL(10))
+		s, _ := New(WithSecret([]byte("helloworld"), HS256), WithIssuer("hello.be"), WithTTL(10*time.Second))
 		v := user{
 			Id:    "1234567890",
 			Name:  "John Doe",
@@ -57,19 +58,69 @@ func TestVerifyToken(t *testing.T) {
 func TestSignAndVerify(t *testing.T) {
 	issuer := WithIssuer("jwt.midbel.be")
 	t.Run("hs256", func(t *testing.T) {
-		s := New(WithSecret("helloworld", HS256), issuer)
+		s, _ := New(WithSecret([]byte("helloworld"), HS256), issuer)
+		testSignAndVerify(t, s)
+	})
+	t.Run("hs384", func(t *testing.T) {
+		s, _ := New(WithSecret([]byte("helloworld"), HS384), issuer)
 		testSignAndVerify(t, s)
 	})
 	t.Run("hs512", func(t *testing.T) {
-		s := New(WithSecret("helloworld", HS512), issuer)
+		s, _ := New(WithSecret([]byte("helloworld"), HS512), issuer)
+		testSignAndVerify(t, s)
+	})
+	t.Run("ecdsa-ano", func(t *testing.T) {
+		s, _ := New(WithECDSA(), issuer)
+		testSignAndVerify(t, s)
+	})
+	t.Run("ecdsa-giv", func(t *testing.T) {
+		const pemkey = `
+-----BEGIN ECDSA PRIVATE KEY-----
+MHcCAQEEIG3Yscij+q3nO4nRGAa9SYpWlRoB18fiRDdZjAlw4E8roAoGCCqGSM49
+AwEHoUQDQgAEmnQbK6KlKBEGirF+SQFWLr0eDmLrhK1cOq949bTC9KEF7eNuJrzq
+nSIevyE15B188DUESW0ByfpxjofXdZ138A==
+-----END ECDSA PRIVATE KEY-----
+		`
+		block, _ := pem.Decode([]byte(pemkey))
+		if block == nil {
+			t.Errorf("fail to decode pem key")
+			return
+		}
+		s, _ := New(WithSecret(block.Bytes, ES256), issuer)
 		testSignAndVerify(t, s)
 	})
 	t.Run("none", func(t *testing.T) {
-		s := New(issuer)
+		s, _ := New(issuer)
 		testSignAndVerify(t, s)
 	})
-	t.Run("rsa-pkcs", func(t *testing.T) {
-		s := New(issuer, WithPKCS(2048))
+	t.Run("rsa-pkcs-pem", func(t *testing.T) {
+		const pemkey = `
+-----BEGIN RSA PRIVATE KEY-----
+MIICXAIBAAKBgQDNAUcV/wifMiJXeNvewMwHO/cSkYEaLAD+OxgZ9WumYmxvkJ4n
+TlJQhjwP/tNOvVVB6ObmnAyeq9seE+vB6jMnwTk4jLwaaP6f8apWw1i2WU6iVRNu
+SCARfw42rRQyi/pY2utQTcxAWms/+TCNbyZzarD9M91R/kpgrII/H8sVkwIDAQAB
+AoGAf6aUBPZRAA/Ponf3MLUMVlTYfA9uPEW6OJPDZiaTaX9P1ghO8lqqlsl/DNa3
+7Qen1uqXHHF+yi5oukndO1oBj1nHmw6LM1Tf/q9+BeRgGJKS2aEWfTKYBelj4bZW
+wNQTESkpjGzinOHrWXq4IfQYNvKUgNlAQKkw7/8djZStkUECQQDXoBmeM40HjVOo
+7fPipfJRkiYTfjmkKIq65CAZ4TBb0IkR8Abz+dhT+mxu7p5CO2DgI6v+nuFTq6H3
+Za5Wj+59AkEA82QYBIaiKEJzrvxj3czU4ES28wpmuDWah+El6wWyErrRKeyltBAS
++zKS9mYW2KRXR2GVX/7kb+RlYCliP9oBTwJAfbI6vNpYUBq2tjdggLM0OxDzWVGv
+0F5B4QizHeMECcHa5bYCl58B2JKXO2Ompf1vT7n7vYZo3BmlZU7E/nkREQJAMBvG
+y445GzAXYa0tqDfGlBXA+8VAjIS76MPOFOhpTF503Y6TKkZLGi/i8KU5OtUxE0Ds
+n67oRF2m1B0Z+HkE7QJBAITb9dXsZkQV+H0LgMXlu0Jjr4RWASG4mnYRyIg+5JnF
+GtHYmbACMxUVIKcRCrDKFTuRymtISC2GE94S3iFxp8c=
+-----END RSA PRIVATE KEY-----
+		`
+		block, _ := pem.Decode([]byte(pemkey))
+		if block == nil {
+			t.Errorf("fail to decode pem key")
+			return
+		}
+		s, _ := New(WithSecret(block.Bytes, RS256))
+		testSignAndVerify(t, s)
+	})
+	t.Run("rsa-pkcs-ano", func(t *testing.T) {
+		s, _ := New(issuer, WithPKCS(2048))
 		testSignAndVerify(t, s)
 	})
 }
