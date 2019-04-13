@@ -68,6 +68,10 @@ func TestSignAndVerify(t *testing.T) {
 		s := New(issuer)
 		testSignAndVerify(t, s)
 	})
+	t.Run("rsa-pkcs", func(t *testing.T) {
+		s := New(issuer, WithPKCS(2048))
+		testSignAndVerify(t, s)
+	})
 }
 
 func testVerifyToken(t *testing.T, s1, s2 Signer) {

@@ -6,7 +6,10 @@
 package jwt
 
 import (
+	"crypto"
 	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -32,9 +35,6 @@ var (
 	//expected signature generated with the secret key
 	ErrSignature = errors.New("bad signature")
 
-	//ErrSecret is returned when an empty secret key is given.
-	ErrSecret = errors.New("bad secret key")
-
 	//ErrMalFormed is returned when the token does not have the expected format
 	//as described in the RFC.
 	ErrMalFormed = errors.New("malformed token")
@@ -56,13 +56,13 @@ type Signer struct {
 	issuer string
 	ttl    time.Duration
 
-	mac hash.Hash
+	sign signer
 }
 
 func New(options ...Option) Signer {
 	var s Signer
 
-	s.alg, s.mac = None, nonehash{}
+	s.alg, s.sign = None, nonehash{}
 	for _, o := range options {
 		o(&s)
 	}
@@ -73,13 +73,27 @@ type Option func(*Signer)
 
 func WithSecret(secret, alg string) Option {
 	return func(s *Signer) {
+
+		var h hs
 		switch alg {
 		case HS256:
-			s.mac = hmac.New(sha256.New, []byte(secret))
+			h.mac = hmac.New(sha256.New, []byte(secret))
 		case HS512:
-			s.mac = hmac.New(sha512.New, []byte(secret))
+			h.mac = hmac.New(sha512.New, []byte(secret))
 		default:
+			return
 		}
+		s.sign = &h
+	}
+}
+
+func WithPKCS(size int) Option {
+	return func(s *Signer) {
+		pk, err := rsa.GenerateKey(rand.Reader, size)
+		if err != nil {
+			return
+		}
+		s.sign = &rsapkcs{pk}
 	}
 }
 
@@ -92,14 +106,14 @@ func WithIssuer(issuer string) Option {
 func WithTTL(ttl time.Duration) Option {
 	return func(s *Signer) {
 		if ttl < time.Second {
-			ttl *= time.Second
+			return
 		}
 		s.ttl = ttl
 	}
 }
 
 func (s Signer) Sign(v interface{}) (string, error) {
-	defer s.mac.Reset()
+	// defer s.mac.Reset()
 
 	now := timeNow()
 	b := claims{
@@ -115,13 +129,11 @@ func (s Signer) Sign(v interface{}) (string, error) {
 		Alg: s.alg,
 	}
 	k := marshalPart(&j) + "." + marshalPart(b)
-	s.mac.Write([]byte(k))
-
-	return k + "." + std.EncodeToString(s.mac.Sum(nil)), nil
+	return s.sign.Sign(k), nil
 }
 
 func (s Signer) Verify(token string, v interface{}) error {
-	h, p, err := s.verifyToken(token)
+	h, p, err := s.sign.Verify(token)
 	if err != nil {
 		return err
 	}
@@ -153,20 +165,6 @@ func (s Signer) validate(b claims) error {
 		return ErrInvalid
 	}
 	return nil
-}
-
-func (s Signer) verifyToken(token string) (string, string, error) {
-	defer s.mac.Reset()
-
-	ps := strings.Split(token, ".")
-	s.mac.Write([]byte(ps[0] + "." + ps[1]))
-	sum := s.mac.Sum(nil)
-
-	var err error
-	if prev, e := std.DecodeString(ps[2]); e != nil || !hmac.Equal(sum, prev) {
-		err = ErrSignature
-	}
-	return ps[0], ps[1], err
 }
 
 type jose struct {
@@ -222,10 +220,86 @@ func unmarshalPart(s string, v interface{}) error {
 	return json.Unmarshal(bs, v)
 }
 
+type signer interface {
+	Sign(string) string
+	Verify(string) (string, string, error)
+}
+
+type hs struct {
+	mac hash.Hash
+}
+
+func (h *hs) Sign(token string) string {
+	defer h.mac.Reset()
+
+	h.mac.Write([]byte(token))
+	return token + "." + std.EncodeToString(h.mac.Sum(nil))
+}
+
+func (h *hs) Verify(token string) (string, string, error) {
+	ps, err := splitToken(token)
+	if err != nil {
+		return "", "", err
+	}
+	defer h.mac.Reset()
+	h.mac.Write([]byte(ps[0] + "." + ps[1]))
+	sum := h.mac.Sum(nil)
+
+	if prev, e := std.DecodeString(ps[2]); e != nil || !hmac.Equal(sum, prev) {
+		err = ErrSignature
+	}
+	return ps[0], ps[1], err
+}
+
+type rsapkcs struct {
+	key *rsa.PrivateKey
+}
+
+func (r *rsapkcs) Sign(token string) string {
+	hashed := sha256.Sum256([]byte(token))
+
+	sign, err := rsa.SignPKCS1v15(rand.Reader, r.key, crypto.SHA256, hashed[:])
+	if err == nil {
+		token += "." + std.EncodeToString(sign)
+	}
+	return token
+}
+
+func (r *rsapkcs) Verify(token string) (string, string, error) {
+	ps, err := splitToken(token)
+	if err != nil {
+		return "", "", err
+	}
+	sign, err := std.DecodeString(ps[2])
+	if err != nil {
+		return "", "", ErrMalFormed
+	}
+	hashed := sha256.Sum256([]byte(ps[0] + "." + ps[1]))
+	err = rsa.VerifyPKCS1v15(&r.key.PublicKey, crypto.SHA256, hashed[:], sign)
+	return ps[0], ps[1], err
+}
+
 type nonehash struct{}
 
-func (n nonehash) Reset()                       {}
-func (n nonehash) Size() int                    { return 0 }
-func (n nonehash) BlockSize() int               { return 0 }
-func (n nonehash) Write(bs []byte) (int, error) { return len(bs), nil }
-func (n nonehash) Sum(_ []byte) []byte          { return nil }
+func (_ nonehash) Sign(token string) string {
+	return token + "."
+}
+
+func (_ nonehash) Verify(token string) (string, string, error) {
+	ps, err := splitToken(token)
+	if err != nil {
+		return "", "", err
+	}
+	if ps[2] != "" {
+		return "", "", ErrMalFormed
+	}
+	return ps[0], ps[1], nil
+}
+
+func splitToken(token string) ([]string, error) {
+	ps := strings.Split(token, ".")
+	if len(ps) != 3 {
+		return nil, ErrMalFormed
+	}
+	return ps, nil
+}
