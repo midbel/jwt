@@ -281,11 +281,11 @@ func (r *rsapkcs) Verify(token string) (string, string, error) {
 
 type nonehash struct{}
 
-func (_ nonehash) Sign(token string) string {
+func (nonehash) Sign(token string) string {
 	return token + "."
 }
 
-func (_ nonehash) Verify(token string) (string, string, error) {
+func (nonehash) Verify(token string) (string, string, error) {
 	ps, err := splitToken(token)
 	if err != nil {
 		return "", "", err
