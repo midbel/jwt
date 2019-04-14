@@ -64,6 +64,25 @@ const (
 	None  = "none"
 )
 
+type Alg string
+
+func (a Alg) whichSigner(secret []byte) (signer, error) {
+	switch g := string(a); g {
+	default:
+		return nil, fmt.Errorf("unknown algorithm %s", string(a))
+	case HS256, HS384, HS512:
+		return hmacSigner(g, secret)
+	case RS256, RS384, RS512, PS256, PS384, PS512:
+		return rsaSigner(g, secret)
+	case ES256, ES384, ES512:
+		return ecdsaSigner(g, secret)
+	}
+}
+
+func (a Alg) whichShafunc() (shaFunc, error) {
+	return whichSHA(string(a))
+}
+
 type Signer struct {
 	alg      string
 	issuer   string
