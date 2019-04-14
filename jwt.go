@@ -65,10 +65,10 @@ const (
 )
 
 type Signer struct {
-	alg    string
-	issuer string
-	lifetime    time.Duration
-	waittime    time.Duration
+	alg      string
+	issuer   string
+	lifetime time.Duration
+	waittime time.Duration
 
 	sign signer
 }
@@ -110,7 +110,7 @@ func WithSecret(secret []byte, alg string) Option {
 				sign = s
 			}
 		default:
-			return fmt.Errorf("unkown algorithm: %s", alg)
+			return fmt.Errorf("unknown algorithm: %s", alg)
 		}
 		s.sign, s.alg = sign, alg
 		return nil
@@ -252,10 +252,10 @@ func (j *jose) UnmarshalJSON(bs []byte) error {
 type claims struct {
 	Payload interface{} `json:"payload"`
 
-	Id        int64      `json:"jti,omitempty"`
-	Issuer    string     `json:"iss,omitempty"`
-	Subject   string     `json:"sub,omitempty"`
-	Audience  string     `json:"aud,omitempty"`
+	Id       int64  `json:"jti,omitempty"`
+	Issuer   string `json:"iss,omitempty"`
+	Subject  string `json:"sub,omitempty"`
+	Audience string `json:"aud,omitempty"`
 
 	Created   *time.Time `json:"iat,omitempty"`
 	Expired   *time.Time `json:"exp,omitempty"`
