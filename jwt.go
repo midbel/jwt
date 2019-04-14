@@ -67,7 +67,8 @@ const (
 type Signer struct {
 	alg    string
 	issuer string
-	ttl    time.Duration
+	lifetime    time.Duration
+	waittime    time.Duration
 
 	sign signer
 }
@@ -143,10 +144,13 @@ func WithIssuer(issuer string) Option {
 	}
 }
 
-func WithTTL(ttl time.Duration) Option {
+func WithTime(ttl, ttw time.Duration) Option {
 	return func(s *Signer) error {
 		if ttl >= time.Second {
-			s.ttl = ttl
+			s.lifetime = ttl
+		}
+		if ttw >= time.Second {
+			s.waittime = ttw
 		}
 		return nil
 	}
@@ -160,8 +164,11 @@ func (s Signer) Sign(v interface{}) (string, error) {
 		Id:      now.Unix(),
 		Created: &now,
 	}
-	if e := now.Add(s.ttl); s.ttl > 0 {
+	if e := now.Add(s.lifetime); s.lifetime > 0 {
 		b.Expired = &e
+	}
+	if e := now.Add(s.waittime); s.waittime > 0 {
+		b.NotBefore = &e
 	}
 	j := jose(s.alg)
 	k := marshalPart(&j) + "." + marshalPart(b)
@@ -191,14 +198,20 @@ func (s Signer) validate(b claims) error {
 	if s.issuer != "" && b.Issuer != s.issuer {
 		return ErrInvalid
 	}
-	if b.Expired == nil || b.Created == nil {
-		return nil
+	if b.NotBefore != nil {
+		if now := timeNow(); !(*b.NotBefore).IsZero() && now.Before(*b.NotBefore) {
+			return ErrInvalid
+		}
 	}
-	if delta := timeSince(*b.Created); s.ttl > 0 && delta >= s.ttl {
-		return ErrInvalid
+	if b.Created != nil {
+		if delta := timeSince(*b.Created); s.lifetime > 0 && delta >= s.lifetime {
+			return ErrInvalid
+		}
 	}
-	if delta := timeSince(*b.Expired); !(*b.Expired).IsZero() && delta > 0 {
-		return ErrInvalid
+	if b.Expired != nil {
+		if delta := timeSince(*b.Expired); !(*b.Expired).IsZero() && delta > 0 {
+			return ErrInvalid
+		}
 	}
 	return nil
 }
@@ -238,10 +251,15 @@ func (j *jose) UnmarshalJSON(bs []byte) error {
 
 type claims struct {
 	Payload interface{} `json:"payload"`
-	Issuer  string      `json:"iss,omitempty"`
-	Id      int64       `json:"jti,omitempty"`
-	Created *time.Time  `json:"iat,omitempty"`
-	Expired *time.Time  `json:"exp,omitempty"`
+
+	Id        int64      `json:"jti,omitempty"`
+	Issuer    string     `json:"iss,omitempty"`
+	Subject   string     `json:"sub,omitempty"`
+	Audience  string     `json:"aud,omitempty"`
+
+	Created   *time.Time `json:"iat,omitempty"`
+	Expired   *time.Time `json:"exp,omitempty"`
+	NotBefore *time.Time `json:"nbf,omitempty"`
 }
 
 func marshalPart(v interface{}) string {

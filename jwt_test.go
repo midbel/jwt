@@ -35,7 +35,7 @@ func TestVerifyToken(t *testing.T) {
 		testVerifyToken(t, s1, s2)
 	})
 	t.Run("expiration", func(t *testing.T) {
-		s, _ := New(WithSecret([]byte("helloworld"), HS256), WithIssuer("hello.be"), WithTTL(10*time.Second))
+		s, _ := New(WithSecret([]byte("helloworld"), HS256), WithIssuer("hello.be"), WithTime(10*time.Second, 0))
 		v := user{
 			Id:    "1234567890",
 			Name:  "John Doe",
@@ -161,6 +161,7 @@ func testSignAndVerify(t *testing.T, s Signer, alg string) {
 		t.Errorf("want: %+v", v)
 		t.Errorf("got : %+v", w)
 	}
+	// t.Logf("alg [%s]: %s", alg, k)
 }
 
 func testTokensEqual(t *testing.T, s1, s2 Signer) {
