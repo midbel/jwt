@@ -57,23 +57,17 @@ func TestVerifyToken(t *testing.T) {
 
 func TestSignAndVerify(t *testing.T) {
 	issuer := WithIssuer("jwt.midbel.be")
-	t.Run("hs256", func(t *testing.T) {
-		s, _ := New(WithSecret([]byte("helloworld"), HS256), issuer)
-		testSignAndVerify(t, s)
-	})
-	t.Run("hs384", func(t *testing.T) {
-		s, _ := New(WithSecret([]byte("helloworld"), HS384), issuer)
-		testSignAndVerify(t, s)
-	})
-	t.Run("hs512", func(t *testing.T) {
-		s, _ := New(WithSecret([]byte("helloworld"), HS512), issuer)
-		testSignAndVerify(t, s)
+	t.Run("hs-all", func(t *testing.T) {
+		for _, a := range []string{HS256, HS384, HS512} {
+			s, _ := New(WithSecret([]byte("helloworld"), a), issuer)
+			testSignAndVerify(t, s, a)
+		}
 	})
 	t.Run("ecdsa-ano", func(t *testing.T) {
 		s, _ := New(WithECDSA(), issuer)
-		testSignAndVerify(t, s)
+		testSignAndVerify(t, s, "anonym")
 	})
-	t.Run("ecdsa-giv", func(t *testing.T) {
+	t.Run("ecdsa-all", func(t *testing.T) {
 		const pemkey = `
 -----BEGIN ECDSA PRIVATE KEY-----
 MHcCAQEEIG3Yscij+q3nO4nRGAa9SYpWlRoB18fiRDdZjAlw4E8roAoGCCqGSM49
@@ -86,14 +80,16 @@ nSIevyE15B188DUESW0ByfpxjofXdZ138A==
 			t.Errorf("fail to decode pem key")
 			return
 		}
-		s, _ := New(WithSecret(block.Bytes, ES256), issuer)
-		testSignAndVerify(t, s)
+		for _, a := range []string{ES256, ES384, ES512} {
+			s, _ := New(WithSecret(block.Bytes, a), issuer)
+			testSignAndVerify(t, s, a)
+		}
 	})
 	t.Run("none", func(t *testing.T) {
 		s, _ := New(issuer)
-		testSignAndVerify(t, s)
+		testSignAndVerify(t, s, "none")
 	})
-	t.Run("rsa-pkcs-pem", func(t *testing.T) {
+	t.Run("rsa-pkcs-all", func(t *testing.T) {
 		const pemkey = `
 -----BEGIN RSA PRIVATE KEY-----
 MIICXAIBAAKBgQDNAUcV/wifMiJXeNvewMwHO/cSkYEaLAD+OxgZ9WumYmxvkJ4n
@@ -116,12 +112,14 @@ GtHYmbACMxUVIKcRCrDKFTuRymtISC2GE94S3iFxp8c=
 			t.Errorf("fail to decode pem key")
 			return
 		}
-		s, _ := New(WithSecret(block.Bytes, RS256))
-		testSignAndVerify(t, s)
+		for _, a := range []string{RS256, RS384, RS512} {
+			s, _ := New(WithSecret(block.Bytes, a))
+			testSignAndVerify(t, s, a)
+		}
 	})
 	t.Run("rsa-pkcs-ano", func(t *testing.T) {
 		s, _ := New(issuer, WithPKCS(2048))
-		testSignAndVerify(t, s)
+		testSignAndVerify(t, s, "anonym")
 	})
 }
 
@@ -142,7 +140,7 @@ func testVerifyToken(t *testing.T, s1, s2 Signer) {
 	}
 }
 
-func testSignAndVerify(t *testing.T, s Signer) {
+func testSignAndVerify(t *testing.T, s Signer, alg string) {
 	v := user{
 		Id:    "1234567890",
 		Name:  "John Doe",
@@ -150,13 +148,13 @@ func testSignAndVerify(t *testing.T, s Signer) {
 	}
 	k, err := s.Sign(v)
 	if err != nil {
-		t.Errorf("unexpected error when signing: %s", err)
+		t.Errorf("unexpected error when signing: %s (%s)", err, alg)
 		return
 	}
 
 	var w user
 	if err := s.Verify(k, &w); err != nil {
-		t.Errorf("token verification failed: %s", err)
+		t.Errorf("token verification failed: %s (%s)", err, alg)
 		return
 	}
 	if v != w {

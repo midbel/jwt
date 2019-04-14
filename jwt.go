@@ -364,8 +364,9 @@ func (e *ecdsha) Verify(token string) (string, string, error) {
 }
 
 type rsapkcs struct {
-	key *rsa.PrivateKey
-	sum shaFunc
+	key     *rsa.PrivateKey
+	hashtyp crypto.Hash
+	sum     shaFunc
 }
 
 func pkcsSigner(alg string, secret []byte) (signer, error) {
@@ -382,13 +383,25 @@ func pkcsSigner(alg string, secret []byte) (signer, error) {
 		return nil, err
 	}
 	sum, err := whichSHA(alg)
-	return &rsapkcs{pk, sum}, err
+
+	var ht crypto.Hash
+	if err == nil {
+		switch alg {
+		case RS256:
+			ht = crypto.SHA256
+		case RS384:
+			ht = crypto.SHA384
+		case RS512:
+			ht = crypto.SHA512
+		}
+	}
+	return &rsapkcs{key: pk, hashtyp: ht, sum: sum}, err
 }
 
 func (r *rsapkcs) Sign(token string) string {
 	hashed := r.sum([]byte(token))
 
-	sign, err := rsa.SignPKCS1v15(rand.Reader, r.key, crypto.SHA256, hashed[:])
+	sign, err := rsa.SignPKCS1v15(rand.Reader, r.key, r.hashtyp, hashed[:])
 	if err == nil {
 		token += "." + std.EncodeToString(sign)
 	}
@@ -405,7 +418,7 @@ func (r *rsapkcs) Verify(token string) (string, string, error) {
 		return "", "", ErrMalformed
 	}
 	hashed := r.sum([]byte(ps[0] + "." + ps[1]))
-	err = rsa.VerifyPKCS1v15(&r.key.PublicKey, crypto.SHA256, hashed[:], sign)
+	err = rsa.VerifyPKCS1v15(&r.key.PublicKey, r.hashtyp, hashed[:], sign)
 	return ps[0], ps[1], err
 }
 
