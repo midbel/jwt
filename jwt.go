@@ -53,7 +53,11 @@ const (
 	HS384 = "HS384"
 	HS512 = "HS512"
 	RS256 = "RS256"
+	RS384 = "RS384"
+	RS512 = "RS512"
 	ES256 = "ES256"
+	ES384 = "ES384"
+	ES512 = "ES512"
 	None  = "none"
 )
 
@@ -89,18 +93,18 @@ func WithSecret(secret []byte, alg string) Option {
 				return err
 			}
 			sign = h
-		case RS256:
-			k, err := x509.ParsePKCS1PrivateKey(secret)
-			if err != nil {
+		case RS256, RS384, RS512:
+			if s, err := pkcsSigner(alg, secret); err != nil {
 				return err
+			} else {
+				sign = s
 			}
-			sign = &rsapkcs{k}
-		case ES256:
-			k, err := x509.ParseECPrivateKey(secret)
-			if err != nil {
+		case ES256, ES512:
+			if s, err := ecdsaSigner(alg, secret); err != nil {
 				return err
+			} else {
+				sign = s
 			}
-			sign = &ecdsha{k}
 		default:
 			return fmt.Errorf("unkown algorithm: %s", alg)
 		}
@@ -111,9 +115,9 @@ func WithSecret(secret []byte, alg string) Option {
 
 func WithPKCS(size int) Option {
 	return func(s *Signer) error {
-		pk, err := rsa.GenerateKey(rand.Reader, size)
+		sign, err := pkcsSigner(RS256, nil)
 		if err == nil {
-			s.sign, s.alg = &rsapkcs{pk}, RS256
+			s.sign, s.alg = sign, RS256
 		}
 		return err
 	}
@@ -121,9 +125,9 @@ func WithPKCS(size int) Option {
 
 func WithECDSA() Option {
 	return func(s *Signer) error {
-		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		es, err := ecdsaSigner(ES256, nil)
 		if err == nil {
-			s.sign = &ecdsha{k}
+			s.sign = es
 		}
 		return err
 	}
@@ -156,9 +160,6 @@ func (s Signer) Sign(v interface{}) (string, error) {
 	if e := now.Add(s.ttl); s.ttl > 0 {
 		b.Expired = &e
 	}
-	// j := jose{
-	// 	Alg: s.alg,
-	// }
 	j := jose(s.alg)
 	k := marshalPart(&j) + "." + marshalPart(b)
 	return s.sign.Sign(k), nil
@@ -301,12 +302,38 @@ func (h *hs) Verify(token string) (string, string, error) {
 
 type ecdsha struct {
 	key *ecdsa.PrivateKey
+	sum shaFunc
+}
+
+func ecdsaSigner(alg string, secret []byte) (signer, error) {
+	var (
+		pk  *ecdsa.PrivateKey
+		err error
+	)
+	if len(secret) == 0 {
+		var curve elliptic.Curve
+		switch alg {
+		case ES256:
+			curve = elliptic.P256()
+		case ES384:
+			curve = elliptic.P384()
+		case ES512:
+			curve = elliptic.P521()
+		}
+		pk, err = ecdsa.GenerateKey(curve, rand.Reader)
+	} else {
+		pk, err = x509.ParseECPrivateKey(secret)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sum, err := whichSHA(alg)
+	return &ecdsha{pk, sum}, err
 }
 
 func (e *ecdsha) Sign(token string) string {
-	hashed := sha256.Sum256([]byte(token))
-
-	r, s, err := ecdsa.Sign(rand.Reader, e.key, hashed[:])
+	hashed := e.sum([]byte(token))
+	r, s, err := ecdsa.Sign(rand.Reader, e.key, hashed)
 	if err == nil {
 		c := struct{ R, S *big.Int }{r, s}
 		if sign, err := asn1.Marshal(c); err == nil {
@@ -329,7 +356,7 @@ func (e *ecdsha) Verify(token string) (string, string, error) {
 	if _, err := asn1.Unmarshal(sign, &c); err != nil {
 		return "", "", ErrMalformed
 	}
-	hashed := sha256.Sum256([]byte(ps[0] + "." + ps[1]))
+	hashed := e.sum([]byte(ps[0] + "." + ps[1]))
 	if !ecdsa.Verify(&e.key.PublicKey, hashed[:], c.R, c.S) {
 		err = ErrInvalid
 	}
@@ -338,10 +365,28 @@ func (e *ecdsha) Verify(token string) (string, string, error) {
 
 type rsapkcs struct {
 	key *rsa.PrivateKey
+	sum shaFunc
+}
+
+func pkcsSigner(alg string, secret []byte) (signer, error) {
+	var (
+		pk  *rsa.PrivateKey
+		err error
+	)
+	if len(secret) == 0 {
+		pk, err = rsa.GenerateKey(rand.Reader, 2048)
+	} else {
+		pk, err = x509.ParsePKCS1PrivateKey(secret)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sum, err := whichSHA(alg)
+	return &rsapkcs{pk, sum}, err
 }
 
 func (r *rsapkcs) Sign(token string) string {
-	hashed := sha256.Sum256([]byte(token))
+	hashed := r.sum([]byte(token))
 
 	sign, err := rsa.SignPKCS1v15(rand.Reader, r.key, crypto.SHA256, hashed[:])
 	if err == nil {
@@ -359,7 +404,7 @@ func (r *rsapkcs) Verify(token string) (string, string, error) {
 	if err != nil {
 		return "", "", ErrMalformed
 	}
-	hashed := sha256.Sum256([]byte(ps[0] + "." + ps[1]))
+	hashed := r.sum([]byte(ps[0] + "." + ps[1]))
 	err = rsa.VerifyPKCS1v15(&r.key.PublicKey, crypto.SHA256, hashed[:], sign)
 	return ps[0], ps[1], err
 }
@@ -387,4 +432,36 @@ func splitToken(token string) ([]string, error) {
 		return nil, ErrMalformed
 	}
 	return ps, nil
+}
+
+type shaFunc func([]byte) []byte
+
+func whichSHA(alg string) (shaFunc, error) {
+	var f shaFunc
+	switch alg {
+	case HS256, RS256, ES256:
+		f = shaSum256
+	case HS384, RS384, ES384:
+		f = shaSum384
+	case HS512, RS512, ES512:
+		f = shaSum512
+	default:
+		return nil, fmt.Errorf("no shaFunc match given alg %s", alg)
+	}
+	return f, nil
+}
+
+func shaSum256(bs []byte) []byte {
+	xs := sha256.Sum256(bs)
+	return xs[:]
+}
+
+func shaSum384(bs []byte) []byte {
+	xs := sha512.Sum384(bs)
+	return xs[:]
+}
+
+func shaSum512(bs []byte) []byte {
+	xs := sha512.Sum512(bs)
+	return xs[:]
 }
