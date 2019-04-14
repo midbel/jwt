@@ -165,6 +165,9 @@ func WithIssuer(issuer string) Option {
 
 func WithTime(ttl, ttw time.Duration) Option {
 	return func(s *Signer) error {
+		if ttw >= ttl {
+			return fmt.Errorf("token will always be expired before they could be used")
+		}
 		if ttl >= time.Second {
 			s.lifetime = ttl
 		}
