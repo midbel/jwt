@@ -89,7 +89,7 @@ nSIevyE15B188DUESW0ByfpxjofXdZ138A==
 		s, _ := New(issuer)
 		testSignAndVerify(t, s, "none")
 	})
-	t.Run("rsa-pkcs-all", func(t *testing.T) {
+	t.Run("rsa-all", func(t *testing.T) {
 		const pemkey = `
 -----BEGIN RSA PRIVATE KEY-----
 MIICXAIBAAKBgQDNAUcV/wifMiJXeNvewMwHO/cSkYEaLAD+OxgZ9WumYmxvkJ4n
@@ -112,7 +112,7 @@ GtHYmbACMxUVIKcRCrDKFTuRymtISC2GE94S3iFxp8c=
 			t.Errorf("fail to decode pem key")
 			return
 		}
-		for _, a := range []string{RS256, RS384, RS512} {
+		for _, a := range []string{RS256, RS384, RS512, PS256, PS384, PS512} {
 			s, _ := New(WithSecret(block.Bytes, a))
 			testSignAndVerify(t, s, a)
 		}

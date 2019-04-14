@@ -55,6 +55,9 @@ const (
 	RS256 = "RS256"
 	RS384 = "RS384"
 	RS512 = "RS512"
+	PS256 = "PS256"
+	PS384 = "PS384"
+	PS512 = "PS512"
 	ES256 = "ES256"
 	ES384 = "ES384"
 	ES512 = "ES512"
@@ -93,13 +96,13 @@ func WithSecret(secret []byte, alg string) Option {
 				return err
 			}
 			sign = h
-		case RS256, RS384, RS512:
-			if s, err := pkcsSigner(alg, secret); err != nil {
+		case RS256, RS384, RS512, PS256, PS384, PS512:
+			if s, err := rsaSigner(alg, secret); err != nil {
 				return err
 			} else {
 				sign = s
 			}
-		case ES256, ES512:
+		case ES256, ES384, ES512:
 			if s, err := ecdsaSigner(alg, secret); err != nil {
 				return err
 			} else {
@@ -115,7 +118,7 @@ func WithSecret(secret []byte, alg string) Option {
 
 func WithPKCS(size int) Option {
 	return func(s *Signer) error {
-		sign, err := pkcsSigner(RS256, nil)
+		sign, err := rsaSigner(RS256, nil)
 		if err == nil {
 			s.sign, s.alg = sign, RS256
 		}
@@ -363,13 +366,16 @@ func (e *ecdsha) Verify(token string) (string, string, error) {
 	return ps[0], ps[1], err
 }
 
-type rsapkcs struct {
+type rsasha struct {
 	key     *rsa.PrivateKey
 	hashtyp crypto.Hash
 	sum     shaFunc
+
+	sign   func([]byte) ([]byte, error)
+	verify func([]byte, []byte) error
 }
 
-func pkcsSigner(alg string, secret []byte) (signer, error) {
+func rsaSigner(alg string, secret []byte) (signer, error) {
 	var (
 		pk  *rsa.PrivateKey
 		err error
@@ -387,28 +393,34 @@ func pkcsSigner(alg string, secret []byte) (signer, error) {
 	var ht crypto.Hash
 	if err == nil {
 		switch alg {
-		case RS256:
+		case RS256, PS256:
 			ht = crypto.SHA256
-		case RS384:
+		case RS384, PS384:
 			ht = crypto.SHA384
-		case RS512:
+		case RS512, PS512:
 			ht = crypto.SHA512
 		}
 	}
-	return &rsapkcs{key: pk, hashtyp: ht, sum: sum}, err
+	r := rsasha{key: pk, hashtyp: ht, sum: sum}
+	if strings.HasPrefix(alg, "RS") {
+		r.sign, r.verify = r.signPKCS, r.verifyPKCS
+	} else {
+		r.sign, r.verify = r.signPSS, r.verifyPSS
+	}
+	return &r, nil
 }
 
-func (r *rsapkcs) Sign(token string) string {
+func (r *rsasha) Sign(token string) string {
 	hashed := r.sum([]byte(token))
 
-	sign, err := rsa.SignPKCS1v15(rand.Reader, r.key, r.hashtyp, hashed[:])
+	sign, err := r.sign(hashed[:])
 	if err == nil {
 		token += "." + std.EncodeToString(sign)
 	}
 	return token
 }
 
-func (r *rsapkcs) Verify(token string) (string, string, error) {
+func (r *rsasha) Verify(token string) (string, string, error) {
 	ps, err := splitToken(token)
 	if err != nil {
 		return "", "", err
@@ -418,8 +430,24 @@ func (r *rsapkcs) Verify(token string) (string, string, error) {
 		return "", "", ErrMalformed
 	}
 	hashed := r.sum([]byte(ps[0] + "." + ps[1]))
-	err = rsa.VerifyPKCS1v15(&r.key.PublicKey, r.hashtyp, hashed[:], sign)
+	err = r.verify(hashed[:], sign)
 	return ps[0], ps[1], err
+}
+
+func (r *rsasha) signPSS(hashed []byte) ([]byte, error) {
+	return rsa.SignPSS(rand.Reader, r.key, r.hashtyp, hashed, nil)
+}
+
+func (r *rsasha) verifyPSS(hashed, sign []byte) error {
+	return rsa.VerifyPSS(&r.key.PublicKey, r.hashtyp, hashed[:], sign, nil)
+}
+
+func (r *rsasha) signPKCS(hashed []byte) ([]byte, error) {
+	return rsa.SignPKCS1v15(rand.Reader, r.key, r.hashtyp, hashed)
+}
+
+func (r *rsasha) verifyPKCS(hashed, sign []byte) error {
+	return rsa.VerifyPKCS1v15(&r.key.PublicKey, r.hashtyp, hashed, sign)
 }
 
 type nonehash struct{}
@@ -452,11 +480,11 @@ type shaFunc func([]byte) []byte
 func whichSHA(alg string) (shaFunc, error) {
 	var f shaFunc
 	switch alg {
-	case HS256, RS256, ES256:
+	case HS256, RS256, ES256, PS256:
 		f = shaSum256
-	case HS384, RS384, ES384:
+	case HS384, RS384, ES384, PS384:
 		f = shaSum384
-	case HS512, RS512, ES512:
+	case HS512, RS512, ES512, PS512:
 		f = shaSum512
 	default:
 		return nil, fmt.Errorf("no shaFunc match given alg %s", alg)
