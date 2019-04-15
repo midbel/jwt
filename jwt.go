@@ -159,7 +159,7 @@ func WithECDSA() Option {
 	return func(s *Signer) error {
 		es, err := ecdsaSigner(ES256, nil)
 		if err == nil {
-			s.sign = es
+			s.sign, s.alg = es, ES256
 		}
 		return err
 	}
