@@ -25,8 +25,6 @@ import (
 
 const JWT = "jwt"
 
-var std = base64.StdEncoding.WithPadding(base64.NoPadding)
-
 var (
 	timeNow   = time.Now
 	timeSince = time.Since
@@ -188,21 +186,25 @@ func WithTime(ttl, ttw time.Duration) Option {
 }
 
 func (s Signer) Sign(v interface{}) (string, error) {
-	now := timeNow()
-	b := claims{
-		Payload: v,
-		Issuer:  s.issuer,
-		Id:      now.Unix(),
-		Created: &now,
-	}
+	var (
+		now = timeNow()
+		body = claims{
+			Payload: v,
+			Issuer:  s.issuer,
+			Id:      now.Unix(),
+			Created: &now,
+		}
+	)
 	if e := now.Add(s.lifetime); s.lifetime > 0 {
-		b.Expired = &e
+		body.Expired = &e
 	}
 	if e := now.Add(s.waittime); s.waittime > 0 {
-		b.NotBefore = &e
+		body.NotBefore = &e
 	}
-	j := jose(s.alg)
-	k := marshalPart(&j) + "." + marshalPart(b)
+	var (
+		j = jose(s.alg)
+		k = marshalPart(&j) + "." + marshalPart(body)
+	)
 	return s.sign.Sign(k), nil
 }
 
@@ -276,7 +278,6 @@ func (j *jose) UnmarshalJSON(bs []byte) error {
 		return ErrMalformed
 	}
 	*j = jose(v.Alg)
-	// j.Alg, j.Typ = v.Alg, v.Typ
 	return nil
 }
 
@@ -292,6 +293,8 @@ type claims struct {
 	Expired   *time.Time `json:"exp,omitempty"`
 	NotBefore *time.Time `json:"nbf,omitempty"`
 }
+
+var std = base64.StdEncoding.WithPadding(base64.NoPadding)
 
 func marshalPart(v interface{}) string {
 	bs, _ := json.Marshal(v)
