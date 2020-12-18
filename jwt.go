@@ -294,7 +294,7 @@ type claims struct {
 	NotBefore *time.Time `json:"nbf,omitempty"`
 }
 
-var std = base64.StdEncoding.WithPadding(base64.NoPadding)
+var std = base64.URLEncoding.WithPadding(base64.NoPadding)
 
 func marshalPart(v interface{}) string {
 	bs, _ := json.Marshal(v)
